@@ -92,11 +92,11 @@ def import_controller(datafile=None, filep=None, alphap=None, refion=None, harmo
                             remove_baseline=remove_baseline, psd_baseline_removed_l=psd_baseline_removed_l,
                             peak_threshold_pct=peak_threshold_pct, min_distance=min_distance,
                             matching_freq_min=matching_freq_min, matching_freq_max=matching_freq_max,
-                            io_params=io_params)
+                            io_params=io_params, correct=correct)
         
         mydata._set_particles_to_simulate_from_file(filep)
         mydata._calculate_moqs()
-        mydata._calculate_srrf(fref=fref, brho=brho, ke=ke, gam=gam, correct=correct)
+        mydata._calculate_srrf(fref=fref, brho=brho, ke=ke, gam=gam)
         
         if isinstance(harmonics, str):
             harmonics = [float(h.strip()) for h in harmonics.replace(',', ' ').split()]

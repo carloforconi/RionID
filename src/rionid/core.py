@@ -61,7 +61,7 @@ class ImportData(object):
     def __init__(self, refion, alphap, filename=None, reload_data=None, circumference=None,
                  highlight_ions=None, remove_baseline=False, psd_baseline_removed_l=1e6,
                  peak_threshold_pct=0.05, min_distance=10, matching_freq_min=None, 
-                 matching_freq_max=None, io_params=None):
+                 matching_freq_max=None, io_params=None, correct=None):
 
         self.simulated_data_dict = {}
         self.particles_to_simulate = []
@@ -87,6 +87,7 @@ class ImportData(object):
         self.remove_baseline = remove_baseline
         self.psd_baseline_removed_l = psd_baseline_removed_l
         self.io_params = io_params or {} 
+        self.correct = correct
 
         # Results containers
         self.peak_freqs = []
@@ -233,65 +234,103 @@ class ImportData(object):
             
         self.peak_freqs = peak_freqs[mask]
         self.peak_heights = amp[peaks][mask]
-        self.peak_widths_freq = np.zeros_like(self.peak_freqs) 
+        #self.peak_widths_freq = np.zeros_like(self.peak_freqs) 
+        # Compute peak widths at half prominence
+        width_results = peak_widths(amp, peaks, rel_height=0.5)
+
+        # width_results[0] = widths in index units
+        # Convert index widths → frequency widths
+        freq_step = np.mean(np.diff(freq)) if len(freq) > 1 else 0.0
+        self.peak_widths_freq = width_results[0] * freq_step
+
 
     def compute_matches(self, match_threshold, f_min=None, f_max=None):
         """
-        Matches simulated ions to experimental peaks.
-
-        Parameters
-        ----------
-        match_threshold : float
-            Max frequency difference (Hz) to consider a match.
-        f_min : float, optional
-            Min frequency bound for matching.
-        f_max : float, optional
-            Max frequency bound for matching.
-
-        Returns
-        -------
-        tuple
-            (chi2, match_count, highlight_ions)
+        Matches simulated ions to experimental peaks and stores full match info.
         """
         sim_items = []
         for h_name, sdata in self.simulated_data_dict.items():
             harmonic = float(h_name)
             for row in sdata:
+                # (sim_freq, ion_name, harmonic)
                 sim_items.append((float(row[0]), row[2], harmonic))
-        
-        if not sim_items: return 0, 0, []
+
+        if not sim_items:
+            self.match_info = []
+            return 0, 0, []
 
         sim_freqs = np.array([x[0] for x in sim_items])
         chi2 = 0.0
         match_count = 0
         matched_ions = []
-        
-        # Logic: For every experimental peak, find closest simulated line
-        for exp_freq in self.peak_freqs:
-            if f_min and exp_freq < f_min: continue
-            if f_max and exp_freq > f_max: continue
-            
+        match_info = []
+
+        for i, exp_freq in enumerate(self.peak_freqs):
+            if f_min and exp_freq < f_min:
+                continue
+            if f_max and exp_freq > f_max:
+                continue
+
             idx = np.argmin(np.abs(sim_freqs - exp_freq))
             diff = abs(sim_freqs[idx] - exp_freq)
-            
+
             if diff <= match_threshold:
                 chi2 += diff**2
                 match_count += 1
-                matched_ions.append(sim_items[idx][1])
-        
+
+                sim_freq, ion_name, harmonic = sim_items[idx]
+
+                match_info.append({
+                    "ion_name": ion_name,
+                    "sim_freq": sim_freq,
+                    "exp_freq": exp_freq,
+                    "peak_width": self.peak_widths_freq[i] if hasattr(self, 
+"peak_widths_freq") 
+else 0.0,
+                    "peak_height": self.peak_heights[i],
+                    "m_q": self.moq.get(ion_name, None),
+                    "gamma_t": self.gammat
+                })
+
+                matched_ions.append(ion_name)
+
         self.chi2 = chi2 / match_count if match_count > 0 else float('inf')
         self.match_count = match_count
-        self.highlight_ions = list(set(matched_ions)) # Update highlights with matches
-        
+        self.highlight_ions = list(set(matched_ions))
+        self.match_info = match_info
+        print(f"exp={exp_freq:.2f}, sim={sim_freq:.2f}, diff={diff:.2f}")
+
         return self.chi2, self.match_count, self.highlight_ions
+
 
     def save_matched_result(self, filename):
         """Saves the list of matched ions to a text file."""
-        if not filename or not self.highlight_ions: return
+        print("DEBUG save_matched_result called with:", filename)
+        #print("DEBUG match_info length:", len(self.match_info))
+
+        has_match_info = hasattr(self, "match_info")
+        print("DEBUG has match_info:", has_match_info)
+        if not has_match_info:
+            return
+
+        print("DEBUG match_info length:", len(self.match_info))
+        if not filename or not self.match_info:
+            return
+
+        if not filename or not hasattr(self, "match_info") or not self.match_info:
+            return
         with open(filename, 'w') as f:
-            f.write("Matched Ions List\n")
-            for ion in self.highlight_ions:
-                f.write(f"{ion}\n")
+            f.write("ion_name,sim_freq[Hz],exp_freq[Hz],peak_width[Hz],peak_height,m/q,gamma_t\n")
+            for row in self.match_info:
+                f.write(
+                    f"{row['ion_name']},"
+                    f"{row['sim_freq']:.6f},"
+                    f"{row['exp_freq']:.6f},"
+                    f"{row['peak_width']:.6f},"
+                    f"{row['peak_height']:.6f},"
+                    f"{row['m_q']:.12f},"
+                    f"{row['gamma_t']:.6f}\n"
+                )
         print(f"Matched results saved to {filename}")
 
     def _save_experimental_data(self):
@@ -341,7 +380,7 @@ class ImportData(object):
                         self.protons[ion_name] = ame[4]
                         break
 
-    def _calculate_srrf(self, fref=None, brho=None, ke=None, gam=None, correct=None):
+    def _calculate_srrf(self, fref=None, brho=None, ke=None, gam=None):
         """
         Calculates Simulated Relative Revolution Frequencies (SRRF).
         
@@ -351,8 +390,8 @@ class ImportData(object):
         self.ref_frequency = self.reference_frequency(fref, brho, ke, gam)
         self.srrf = array([1 - self.alphap * (self.moq[name] - self.moq[self.ref_ion]) / self.moq[self.ref_ion]
                            for name in self.moq])
-        if correct:
-            correction = polyval(array(correct), self.srrf * self.ref_frequency)
+        if self.correct:
+            correction = polyval(array(self.correct), self.srrf * self.ref_frequency)
             self.srrf = self.srrf + correction / self.ref_frequency
 
     def _simulated_data(self, brho=None, harmonics=None, mode=None, sim_scalingfactor=None, nions=None):

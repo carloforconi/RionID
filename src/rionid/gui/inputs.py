@@ -252,6 +252,14 @@ class RionID_GUI(QWidget):
         
         self.simulation_result_edit = QLineEdit()
         self.matched_result_edit = QLineEdit()
+        # Matched Result File + Browse button
+        self.matched_result_button = QPushButton("Browse")
+        self.matched_result_button.clicked.connect(self.browse_matched_result)
+        h_mr = QHBoxLayout()
+        h_mr.addWidget(self.matched_result_edit)
+        h_mr.addWidget(self.matched_result_button)
+        opt_layout.addRow("Matched Result File:", h_mr)
+
         opt_layout.addRow("Sim Result File:", self.simulation_result_edit)
         opt_layout.addRow("Matched Result File:", self.matched_result_edit)
         
@@ -395,6 +403,16 @@ class RionID_GUI(QWidget):
             self.save_parameters()
             data = import_controller(**vars(args))
             self.saved_data = data
+
+            threshold = float(self.threshold_edit.text())
+            data.compute_matches(threshold)
+
+            matched_file = self.matched_result_edit.text().strip()
+            print("DEBUG (run_script) matched_file =", matched_file)
+            if matched_file:
+                print("DEBUG (run_script) calling save_matched_result")
+                data.save_matched_result(matched_file)
+
             self.visualization_signal.emit(data)
         except Exception as e:
             self.signalError.emit(str(e))
@@ -412,8 +430,9 @@ class RionID_GUI(QWidget):
             datafile = self.datafile_edit.text().strip()
             if not datafile: raise ValueError("No experimental data provided.")
             
-            if not self._check_io_params(datafile): return
-
+            #if not self._check_io_params(datafile): return
+            pass
+            
             # --- 1. Gather Constants & Ranges ---
             filep = self.filep_edit.text() or None
             remove_baseline = self.remove_baseline_checkbox.isChecked()
@@ -444,7 +463,8 @@ class RionID_GUI(QWidget):
                 circumference=circ, remove_baseline=remove_baseline, 
                 psd_baseline_removed_l=psd_l, peak_threshold_pct=peak_pct, 
                 min_distance=min_dist, io_params=self.current_io_params,
-                reload_data=reload
+                reload_data=reload,
+                correct=correct
             )
             
             model._set_particles_to_simulate_from_file(filep)
@@ -487,6 +507,9 @@ class RionID_GUI(QWidget):
                     
                     # Compute Match
                     chi2, count, _ = model.compute_matches(threshold)
+                    matched_file = self.matched_result_edit.text().strip()
+                    if matched_file:
+                        model.save_matched_result(matched_file)
                     results.append((f_ref, alpha, chi2, count))
 
             self.value_edit.setStyleSheet(orig_val_style)
@@ -507,6 +530,11 @@ class RionID_GUI(QWidget):
                 model._simulated_data(harmonics=harm_list, mode='Frequency', sim_scalingfactor=sim_sf)
                 model.compute_matches(threshold)
                 
+                matched_file = self.matched_result_edit.text().strip()
+                print("DEBUG matched_file =", matched_file)
+                if matched_file:
+                    print("DEBUG calling save_matched_result")
+                    model.save_matched_result(matched_file)
                 self.saved_data = model
                 self.visualization_signal.emit(model)
                 self.save_parameters()
@@ -522,6 +550,12 @@ class RionID_GUI(QWidget):
     def browse_lppfile(self):
         f, _ = QFileDialog.getOpenFileName(self, "Select LPP")
         if f: self.filep_edit.setText(f)
+    def browse_matched_result(self):
+        f, _ = QFileDialog.getOpenFileName(self,"Select Matched Result File",
+        "",
+        "CSV Files (*.csv);;All Files (*)")
+        if f: self.matched_result_edit.setText(f)
+
 
 class CollapsibleGroupBox(QGroupBox):
         def __init__(self, title="", parent=None):
